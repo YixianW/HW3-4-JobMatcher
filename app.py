@@ -1,8 +1,10 @@
 import os
 import requests
-from flask import Flask, render_template, request
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes to allow GitHub Pages frontend access
 
 # --- 1. 安全配置：从系统环境变量读取 Key，防止 GitHub 泄露 ---
 # 在 Render 的 Environment Variables 面板中设置这两个变量
@@ -62,39 +64,62 @@ def analyze_aria_fit(search_query, job_title, description):
         "reasons": reasons[:3]
     }
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET'])
 def index():
-    results = []
-    if request.method == 'POST':
-        query = request.form.get('keyword', '').strip()
+    return jsonify({
+        "message": "Job Matcher API - Backend is running. Use the /search endpoint to find jobs."
+    })
+
+@app.route('/search', methods=['POST'])
+def search():
+    """API endpoint to search jobs and return JSON results"""
+    try:
+        # Get JSON data from request
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        query = data.get('keyword', '').strip()
+        if not query:
+            return jsonify({"error": "Keyword is required"}), 400
+        
+        if not ADZUNA_ID or not ADZUNA_KEY:
+            return jsonify({"error": "API credentials not configured"}), 500
         
         # API Call for US jobs only
         url = f"https://api.adzuna.com/v1/api/jobs/us/search/1?app_id={ADZUNA_ID}&app_key={ADZUNA_KEY}&results_per_page=15&what={query}&sort_by=date"
         
-        try:
-            response = requests.get(url)
-            data = response.json()
-            if data.get('results'):
-                for job in data['results']:
-                    analysis = analyze_aria_fit(query, job['title'], job['description'])
-                    
-                    # Filter for relevance
-                    if analysis['score'] >= 4:
-                        analysis.update({
-                            "title": job['title'], 
-                            "company": job['company']['display_name'],
-                            "location": job['location']['display_name'], 
-                            "url": job['redirect_url']
-                        })
-                        results.append(analysis)
+        response = requests.get(url)
+        response.raise_for_status()
+        api_data = response.json()
+        
+        results = []
+        if api_data.get('results'):
+            for job in api_data['results']:
+                analysis = analyze_aria_fit(query, job['title'], job['description'])
                 
-                # Sort results by match score
-                results = sorted(results, key=lambda x: x['score'], reverse=True)[:10]
-        except Exception as e:
-            print(f"API Error: {e}")
-
-    return render_template('index.html', results=results)
+                # Filter for relevance
+                if analysis['score'] >= 4:
+                    analysis.update({
+                        "title": job['title'], 
+                        "company": job['company']['display_name'],
+                        "location": job['location']['display_name'], 
+                        "url": job['redirect_url']
+                    })
+                    results.append(analysis)
+            
+            # Sort results by match score
+            results = sorted(results, key=lambda x: x['score'], reverse=True)[:10]
+        
+        return jsonify({"success": True, "results": results})
+        
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"API request failed: {str(e)}"}), 502
+    except Exception as e:
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 if __name__ == '__main__':
     # Flask default port is 5000
-    app.run(debug=True)
+    # In production (Render), the app will run on port 8000
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
