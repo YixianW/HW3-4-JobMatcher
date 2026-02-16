@@ -64,6 +64,10 @@ def analyze_aria_fit(search_query, job_title, description):
         "reasons": reasons[:3]
     }
 
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
+
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({
